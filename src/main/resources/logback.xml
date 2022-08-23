@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="true" scanPeriod="60000">
+
+    <!-- 从yml中获取 变量值 -->
+    <springProperty scope="context" name="log.path" source="fd.log.path"/>
+    <springProperty scope="context" name="log.name" source="fd.log.name"/>
+    <springProperty scope="context" name="log.level" source="fd.log.level"/>
+
+    <property name="LOG_PATH" value="${log.path}"/>
+    <property name="LOG_NAME" value="${log.name}"/>
+    <property name="LOG_LEVEL" value="${log.level}"/>
+    <!-- 取自上面的log_name的值 -->
+    <!--<contextName>${LOG_NAME}</contextName>-->
+    <!--定义日志文件的存储地址 勿在 LogBack 的配置中使用相对路径-->
+    <property name="PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{50}[%F:%L] - %msg%n"/>
+
+    <!-- 控制台输出 -->
+    <appender name="consoleAppender" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="siftAppender" class="ch.qos.logback.classic.sift.SiftingAppender">
+        <discriminator class="ch.qos.logback.classic.sift.ContextBasedDiscriminator">
+            <defaultValue>unknown</defaultValue>
+        </discriminator>
+        <sift>
+            <appender name="PRD_FILE_${LOG_NAME}"
+                      class="ch.qos.logback.core.rolling.RollingFileAppender">
+                <file>${LOG_PATH}/fd-${LOG_NAME}.log</file>
+                <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                    <fileNamePattern>${LOG_PATH}/%d{yyyy-MM-dd,aux}/fd-${LOG_NAME}-%d{yyyy-MM-dd-HH}.log.zip
+                    </fileNamePattern>
+                    <!-- 文件最大保存历史数量 -->
+                    <maxHistory>30</maxHistory>
+                    <totalSizeCap>10GB</totalSizeCap>
+                </rollingPolicy>
+                <layout class="ch.qos.logback.classic.PatternLayout">
+                    <pattern>${PATTERN}</pattern>
+                </layout>
+            </appender>
+        </sift>
+    </appender>
+
+    <!--异步输出-->
+    <appender name="asyncAppender" class="ch.qos.logback.classic.AsyncAppender">
+        <discardingThreshold>0</discardingThreshold>
+        <queueSize>512</queueSize>
+        <appender-ref ref="siftAppender"/>
+        <includeCallerData>true</includeCallerData>
+    </appender>
+
+    <logger name="com.example.demogateway" level="${LOG_LEVEL}"/>
+
+    <!-- 日志输出级别 -->
+    <root level="info">
+        <appender-ref ref="consoleAppender"/>
+        <appender-ref ref="asyncAppender"/>
+    </root>
+</configuration>
+
