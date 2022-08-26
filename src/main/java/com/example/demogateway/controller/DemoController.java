@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RefreshScope
 public class DemoController {
-	@Value("key1")
+	@Value("${key1}")
 	private String key1;
 
 	@GetMapping("/nacos/config")
