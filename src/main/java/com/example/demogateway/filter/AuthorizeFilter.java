@@ -31,7 +31,12 @@ import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-@Component
+/**
+ * 废弃本类
+ * @author moyanxia
+ *
+ */
+//@Component
 @Slf4j
 public class AuthorizeFilter implements GlobalFilter, Ordered {
 	@Override
@@ -41,6 +46,7 @@ public class AuthorizeFilter implements GlobalFilter, Ordered {
 
 		ServerRequest serverRequest = new DefaultServerRequest(exchange); // mediaType
 		MediaType mediaType = exchange.getRequest().getHeaders().getContentType();
+		Map mapCheckInfo = new HashMap<>();
 		// read & modify body
 		Mono<String> modifiedBody = serverRequest.bodyToMono(String.class).flatMap(body -> {
 			if (MediaType.APPLICATION_FORM_URLENCODED.isCompatibleWith(mediaType)) {
@@ -56,14 +62,26 @@ public class AuthorizeFilter implements GlobalFilter, Ordered {
 				Map bodyMap = JSON.parseObject(body, Map.class);
 				// TODO decrypt & auth
 				log.info("bodyMap:" + bodyMap);
-				if (!checkSign(bodyMap)) {
-					 getVoidMono(serverHttpResponse, ResponseCodeEnum.TOKEN_INVALID);
-				}
+				bodyMap.put("newKey", "newValue");
+				//exchange.getAttributes().put("cachedRequestBody", body);
+//				if (!checkSign(bodyMap)) {
+//					mapCheckInfo.put("header", serverHttpRequest.getHeaders());
+//					mapCheckInfo.put("md5CheckResult", "0");
+//					mapCheckInfo.put("bodyStr", JSON.toJSONString(bodyMap));
+//				}
 				// new body map
 				return Mono.just(body);
 			}
 			return Mono.empty();
 		});
+		if ("0".equals(mapCheckInfo.get("md5CheckResult"))) {
+			serverHttpResponse.getHeaders().add("Content-Type", "application/json;charset=UTF-8");
+			ResponseResult responseResult = ResponseResult.error(400, mapCheckInfo.toString());
+			DataBuffer dataBuffer = serverHttpResponse.bufferFactory()
+					.wrap(JSON.toJSONString(responseResult).getBytes());
+			return serverHttpResponse.writeWith(Flux.just(dataBuffer));
+		}
+
 		BodyInserter bodyInserter = BodyInserters.fromPublisher(modifiedBody, String.class);
 		HttpHeaders headers = new HttpHeaders();
 		headers.putAll(exchange.getRequest().getHeaders());
@@ -117,7 +135,7 @@ public class AuthorizeFilter implements GlobalFilter, Ordered {
 
 	@Override
 	public int getOrder() {
-		return -100;
+		return -50;
 	}
 
 	private Map<String, Object> decodeBody(String body) {
