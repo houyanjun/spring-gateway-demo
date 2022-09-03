@@ -147,6 +147,7 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
 		Mono<String> modifiedBody = serverRequest.bodyToMono(String.class).flatMap(body -> {
 			gatewayLog.setRequestBody(body);
 			//exchange.getAttributes().put("cachedRequestBody", body);
+			exchange.getAttributes().put("cachedRequestBody", body);
 			return Mono.just(body);
 		});
 

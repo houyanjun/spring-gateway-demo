@@ -38,6 +38,7 @@ import reactor.core.publisher.Mono;
  */
 //@Component
 @Slf4j
+@Deprecated
 public class AuthorizeFilter implements GlobalFilter, Ordered {
 	@Override
 	public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {

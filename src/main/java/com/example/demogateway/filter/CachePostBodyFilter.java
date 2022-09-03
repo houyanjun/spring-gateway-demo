@@ -17,7 +17,8 @@ import io.netty.buffer.UnpooledByteBufAllocator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-@Component
+//@Component
+@Deprecated
 public class CachePostBodyFilter implements GlobalFilter, Ordered {
 
 	@Override
