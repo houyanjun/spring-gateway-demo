@@ -30,7 +30,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @Slf4j
-@Component
+//@Component
 public class AuthAndLogFilter implements GlobalFilter, Ordered {
 
 	@Override

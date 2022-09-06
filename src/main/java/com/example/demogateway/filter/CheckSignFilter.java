@@ -1,10 +1,11 @@
 package com.example.demogateway.filter;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 
 import org.apache.commons.lang3.StringUtils;
 import org.reactivestreams.Publisher;
@@ -36,7 +37,7 @@ import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.server.ServerWebExchange;
 
 import com.alibaba.fastjson.JSON;
-import com.example.demogateway.response.ResponseResult;
+import com.alibaba.nacos.common.utils.MD5Utils;
 
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -45,89 +46,103 @@ import reactor.core.publisher.Mono;
 
 @Slf4j
 @Component
-public class AccessLogFilter implements GlobalFilter, Ordered {
+public class CheckSignFilter implements GlobalFilter, Ordered {
 
 	private final List<HttpMessageReader<?>> messageReaders = HandlerStrategies.withDefaults().messageReaders();
 
 	@Override
 	public int getOrder() {
-		return -100;
+		return -50;
 	}
 
 	@Override
 	@SuppressWarnings("unchecked")
 	public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+		ServerHttpRequest serverHttpRequest = exchange.getRequest();
+		ServerHttpResponse serverHttpResponse = exchange.getResponse();
 
-		ServerHttpRequest request = exchange.getRequest();
+		StringBuilder logBuilder = new StringBuilder();
+		String method = serverHttpRequest.getMethodValue().toUpperCase();
+		if ("POST".equals(method)) {
+			Map<String, Object> params = parseRequest(exchange, logBuilder);
+			boolean r = checkSignature(params, serverHttpRequest);
+			if (!r) {
+				Map map = new HashMap<>();
+				map.put("code", 2);
+				map.put("message", "签名验证失败");
+				String resp = JSON.toJSONString(map);
+				logBuilder.append(",resp=").append(resp);
+				log.info(logBuilder.toString());
+				DataBuffer bodyDataBuffer = serverHttpResponse.bufferFactory().wrap(resp.getBytes());
+				serverHttpResponse.getHeaders().add("Content-Type", "text/plain;charset=UTF-8");
+				return serverHttpResponse.writeWith(Mono.just(bodyDataBuffer));
+			}
+		}
 
-		// 请求路径
-		String requestPath = request.getPath().pathWithinApplication().value();
-
-		Route route = getGatewayRoute(exchange);
-		String ipAddress = getIpAddress(request);
-
-		GatewayLog gatewayLog = new GatewayLog();
-		gatewayLog.setSchema(request.getURI().getScheme());
-		gatewayLog.setRequestMethod(request.getMethodValue());
-		gatewayLog.setRequestPath(requestPath);
-		gatewayLog.setTargetServer(route.getId());
-		gatewayLog.setRequestTime(new Date());
-		gatewayLog.setIp(ipAddress);
-
-		MediaType mediaType = request.getHeaders().getContentType();
+		MediaType mediaType = serverHttpRequest.getHeaders().getContentType();
 
 		if (MediaType.APPLICATION_FORM_URLENCODED.isCompatibleWith(mediaType)
 				|| MediaType.APPLICATION_JSON.isCompatibleWith(mediaType)) {
-			return writeBodyLog(exchange, chain, gatewayLog);
+			return writeBodyLog(exchange, chain);
 		} else {
-			return writeBasicLog(exchange, chain, gatewayLog);
+			return writeBasicLog(exchange, chain);
 		}
 	}
 
-	private String getIpAddress(ServerHttpRequest request) {
-		HttpHeaders headers = request.getHeaders();
-		String ip = headers.getFirst("x-forwarded-for");
-		if (ip != null && ip.length() != 0 && !"unknown".equalsIgnoreCase(ip)) {
-			// 多次反向代理后会有多个ip值，第一个ip才是真实ip
-			if (ip.indexOf(",") != -1) {
-				ip = ip.split(",")[0];
+	private Map<String, Object> parseRequest(ServerWebExchange exchange, StringBuilder logBuilder) {
+		ServerHttpRequest serverHttpRequest = exchange.getRequest();
+		String method = serverHttpRequest.getMethodValue().toUpperCase();
+		logBuilder.append(method).append(",").append(serverHttpRequest.getURI());
+		MultiValueMap<String, String> query = serverHttpRequest.getQueryParams();
+		Map<String, Object> params = new HashMap<>();
+		query.forEach((k, v) -> {
+			params.put(k, v.get(0));
+		});
+		if ("POST".equals(method)) {
+			String body = exchange.getAttributeOrDefault("cachedRequestBody", "");
+			Map bodyMap = JSON.parseObject(body, Map.class);
+			return bodyMap;
+		} else if ("GET".equals(method)) {
+			Map queryParam = exchange.getRequest().getQueryParams();
+		}
+		return params;
+	}
+
+	private boolean checkSignature(Map<String, Object> params, ServerHttpRequest serverHttpRequest) {
+
+		String sign = String.valueOf(params.get("sign"));
+		if (StringUtils.isBlank(sign)) {
+			return false;
+		}
+
+		Map dataMap = (Map) params.get("data");
+		// 检查签名
+		Map<String, Object> sorted = new TreeMap<>();
+		params.forEach((k, v) -> {
+			if (!"sign".equals(k)) {
+				sorted.put(k, v);
 			}
+		});
+		StringBuilder builder = new StringBuilder();
+		sorted.forEach((k, v) -> {
+			builder.append(k).append("=").append(v).append("&");
+		});
+		String value = builder.toString();
+		value = value.substring(0, value.length() - 1);
+		if (!sign.equalsIgnoreCase(MD5Utils.md5Hex(value, "UTF-8"))) {
+			return false;
 		}
-		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
-			ip = headers.getFirst("Proxy-Client-IP");
-		}
-		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
-			ip = headers.getFirst("WL-Proxy-Client-IP");
-		}
-		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
-			ip = headers.getFirst("HTTP_CLIENT_IP");
-		}
-		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
-			ip = headers.getFirst("HTTP_X_FORWARDED_FOR");
-		}
-		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
-			ip = headers.getFirst("X-Real-IP");
-		}
-		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
-			ip = request.getRemoteAddress().getAddress().getHostAddress();
-		}
-		return ip;
+
+		return true;
 	}
 
-	private Mono<Void> writeBasicLog(ServerWebExchange exchange, GatewayFilterChain chain, GatewayLog accessLog) {
-		StringBuilder builder = new StringBuilder();
-		MultiValueMap<String, String> queryParams = exchange.getRequest().getQueryParams();
-		for (Map.Entry<String, List<String>> entry : queryParams.entrySet()) {
-			builder.append(entry.getKey()).append("=").append(StringUtils.join(entry.getValue(), ","));
-		}
-		accessLog.setRequestBody(builder.toString());
-
+	private Mono<Void> writeBasicLog(ServerWebExchange exchange, GatewayFilterChain chain) {
 		// 获取响应体
-		ServerHttpResponseDecorator decoratedResponse = recordResponseLog(exchange, accessLog);
+		ServerHttpResponseDecorator decoratedResponse = recordResponseLog(exchange);
 
 		return chain.filter(exchange.mutate().response(decoratedResponse).build()).then(Mono.fromRunnable(() -> {
 			// 打印日志
-			writeAccessLog(accessLog);
+//			writeAccessLog(accessLog);
 		}));
 	}
 
@@ -141,24 +156,13 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
 	 * @return
 	 */
 	@SuppressWarnings("unchecked")
-	private Mono writeBodyLog(ServerWebExchange exchange, GatewayFilterChain chain, GatewayLog gatewayLog) {
+	private Mono writeBodyLog(ServerWebExchange exchange, GatewayFilterChain chain) {
 		ServerRequest serverRequest = ServerRequest.create(exchange, messageReaders);
 
 		Mono<String> modifiedBody = serverRequest.bodyToMono(String.class).flatMap(body -> {
-			gatewayLog.setRequestBody(body);
-			exchange.getAttributes().put("cachedRequestBody", body);
+			// exchange.getAttributes().put("cachedRequestBody", body);
 			return Mono.just(body);
 		});
-
-//		String body = String.valueOf(exchange.getAttributes().getOrDefault("cachedRequestBody", ""));
-//		Map bodyMap = JSON.parseObject(body, Map.class);
-//		if (!bodyMap.containsKey("sign")) {
-//			exchange.getResponse().getHeaders().add("Content-Type", "application/json;charset=UTF-8");
-//			ResponseResult responseResult = ResponseResult.error(123, exchange.getRequest().getHeaders() + body);
-//			DataBuffer dataBuffer = exchange.getResponse().bufferFactory()
-//					.wrap(JSON.toJSONString(responseResult).getBytes());
-//			return exchange.getResponse().writeWith(Flux.just(dataBuffer));
-//		}
 
 		// 通过 BodyInserter 插入 body(支持修改body), 避免 request body 只能获取一次
 		BodyInserter bodyInserter = BodyInserters.fromPublisher(modifiedBody, String.class);
@@ -175,27 +179,27 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
 			ServerHttpRequest decoratedRequest = requestDecorate(exchange, headers, outputMessage);
 
 			// 记录响应日志
-			ServerHttpResponseDecorator decoratedResponse = recordResponseLog(exchange, gatewayLog);
+			ServerHttpResponseDecorator decoratedResponse = recordResponseLog(exchange);
 
 			// 记录普通的
 			return chain.filter(exchange.mutate().request(decoratedRequest).response(decoratedResponse).build())
 					.then(Mono.fromRunnable(() -> {
 						// 打印日志
-						writeAccessLog(gatewayLog);
+//						writeAccessLog(gatewayLog);
 					}));
 		}));
 	}
 
-	/**
-	 * 打印日志
-	 * 
-	 * @author javadaily
-	 * @date 2021/3/24 14:53
-	 * @param gatewayLog 网关日志
-	 */
-	private void writeAccessLog(GatewayLog gatewayLog) {
-		log.info(gatewayLog.toString());
-	}
+//	/**
+//	 * 打印日志
+//	 * 
+//	 * @author javadaily
+//	 * @date 2021/3/24 14:53
+//	 * @param gatewayLog 网关日志
+//	 */
+//	private void writeAccessLog(GatewayLog gatewayLog) {
+//		log.info(gatewayLog.toString());
+//	}
 
 	private Route getGatewayRoute(ServerWebExchange exchange) {
 		return exchange.getAttribute(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR);
@@ -237,7 +241,7 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
 	/**
 	 * 记录响应日志 通过 DataBufferFactory 解决响应体分段传输问题。
 	 */
-	private ServerHttpResponseDecorator recordResponseLog(ServerWebExchange exchange, GatewayLog gatewayLog) {
+	private ServerHttpResponseDecorator recordResponseLog(ServerWebExchange exchange) {
 		ServerHttpResponse response = exchange.getResponse();
 		DataBufferFactory bufferFactory = response.bufferFactory();
 
@@ -246,22 +250,14 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
 			public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
 				if (body instanceof Flux) {
 					Date responseTime = new Date();
-					gatewayLog.setResponseTime(responseTime);
-					// 计算执行时间
-					long executeTime = (responseTime.getTime() - gatewayLog.getRequestTime().getTime());
-
-					gatewayLog.setExecuteTime(executeTime);
-
 					// 获取响应类型，如果是 json 就打印
 					String originalResponseContentType = exchange
 							.getAttribute(ServerWebExchangeUtils.ORIGINAL_RESPONSE_CONTENT_TYPE_ATTR);
 					if (Objects.equals(this.getStatusCode(), HttpStatus.OK)
 							&& StringUtils.isNotBlank(originalResponseContentType)
 							&& originalResponseContentType.contains("application/json")) {
-
 						Flux<? extends DataBuffer> fluxBody = Flux.from(body);
 						return super.writeWith(fluxBody.buffer().map(dataBuffers -> {
-
 							// 合并多个流集合，解决返回体分段传输
 							DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
 							DataBuffer join = dataBufferFactory.join(dataBuffers);
@@ -270,10 +266,6 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
 
 							// 释放掉内存
 							DataBufferUtils.release(join);
-							String responseResult = new String(content, StandardCharsets.UTF_8);
-
-							gatewayLog.setResponseData(responseResult);
-
 							return bufferFactory.wrap(content);
 						}));
 					}
